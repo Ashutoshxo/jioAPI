@@ -1,0 +1,26 @@
+node_modules/
+.vscode/
+__pycache__/
+*.pyc
+
+# Local secrets and live session data
+a.json
+telegram_config.json
+credentials.json
+user_data/
+edge-cookies-*/
+
+# Runtime inputs/outputs with personal data
+address_input.json
+order_input.json
+last_order.json
+debug/
+*_response.json
+cart_response*.json
+catalog_dump.json
+checkout_network_log.json
+captured_remove_requests.json
+
+# Local environment files
+.env
+.env.*

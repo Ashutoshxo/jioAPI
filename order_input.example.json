@@ -1,0 +1,11 @@
+{
+  "dry_run": true,
+  "total_min_price": 0.0,
+  "total_max_price": 999999.0,
+  "products": [
+    {
+      "product_url": "https://www.jiomart.com/product/example-product-12345678",
+      "quantity": 1
+    }
+  ]
+}

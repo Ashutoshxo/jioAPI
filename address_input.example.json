@@ -1,0 +1,13 @@
+{
+  "fullName": "Your Name",
+  "phone": "9876543210",
+  "address_type": "Home",
+  "pin": "400001",
+  "city": "Mumbai",
+  "state": "Maharashtra",
+  "line1": "Flat 101, Example Building",
+  "line2": "Example Street",
+  "landmark": "Near Example Store",
+  "latitude": 18.9388,
+  "longitude": 72.8354
+}

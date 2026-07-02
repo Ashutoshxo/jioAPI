@@ -1,0 +1,15 @@
+{
+  "name": "jio-api",
+  "version": "1.0.0",
+  "description": "JioMart API Automation Suite",
+  "main": "get_cookies.js",
+  "scripts": {
+    "cookies": "node get_cookies.js",
+    "cookies:live-edge": "node get_cookies_live_edge.js"
+  },
+  "dependencies": {
+    "@gofynd/fp-signature": "^2.0.1",
+    "impit": "^0.14.1",
+    "puppeteer": "^25.1.0"
+  }
+}
