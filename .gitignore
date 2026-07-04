@@ -15,6 +15,9 @@ address_input.json
 order_input.json
 last_order.json
 debug/
+runtime/
+*.sqlite3
+*.sqlite3-journal
 *_response.json
 cart_response*.json
 catalog_dump.json

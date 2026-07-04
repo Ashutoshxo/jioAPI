@@ -108,7 +108,9 @@ def send_authorized_request(method, url, headers=None, data=None, json_data=None
     addr_state = None
     addr_latitude = None
     addr_longitude = None
-    addr_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "address_input.json")
+    addr_file = os.environ.get("JIOMART_ADDRESS_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "address_input.json"
+    )
     if os.path.exists(addr_file):
         try:
             with open(addr_file, "r", encoding="utf-8") as f:

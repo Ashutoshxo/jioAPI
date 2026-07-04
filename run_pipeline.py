@@ -20,6 +20,7 @@ import sys
 import io
 import re
 import urllib.parse
+import argparse
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -95,6 +96,21 @@ def load_json(path):
         err(f"File not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the JioMart order pipeline.")
+    parser.add_argument("--email", help="Saved cookie account key to use.")
+    parser.add_argument(
+        "--address-file",
+        default=os.path.join(DIR, "address_input.json"),
+        help="Address JSON file for this run.",
+    )
+    parser.add_argument(
+        "--order-file",
+        default=os.path.join(DIR, "order_input.json"),
+        help="Order JSON file for this run.",
+    )
+    return parser.parse_args()
 
 # ─────────────────────────────────────────────
 # PHASE 1 — Address
@@ -407,8 +423,13 @@ def place_cod_order(cart_id, addr_id, email):
 # MAIN
 # ─────────────────────────────────────────────
 def main():
-    addr_input  = load_json(os.path.join(DIR, "address_input.json"))
-    order_input = load_json(os.path.join(DIR, "order_input.json"))
+    args = parse_args()
+    if args.email:
+        os.environ["JIOMART_ACCOUNT"] = args.email
+    os.environ["JIOMART_ADDRESS_FILE"] = args.address_file
+
+    addr_input  = load_json(args.address_file)
+    order_input = load_json(args.order_file)
 
     dry_run = order_input.get("dry_run", True)
     

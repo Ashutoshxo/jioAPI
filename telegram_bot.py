@@ -7,34 +7,37 @@ import requests
 import telebot
 from telebot import types
 
+import order_store
+
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(DIR, "telegram_config.json")
 ADDRESS_FILE = os.path.join(DIR, "address_input.json")
 ORDER_FILE = os.path.join(DIR, "order_input.json")
+RUNTIME_DIR = os.path.join(DIR, "runtime", "orders")
 
 
-def load_bot_token():
+def load_config():
     if not os.path.exists(CONFIG_FILE):
-        default_config = {"bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE"}
+        default_config = {
+            "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+            "admin_chat_ids": []
+        }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(default_config, f, indent=2)
         print(f"Created {CONFIG_FILE}. Please add your real bot token from BotFather.")
-        return None
+        return {}
 
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        token = config.get("bot_token")
-        if token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" or not token:
-            return None
-        return token
+            return json.load(f)
     except Exception as e:
         print(f"Error loading bot token: {e}")
-        return None
+        return {}
 
 
-BOT_TOKEN = load_bot_token()
+CONFIG = load_config()
+BOT_TOKEN = CONFIG.get("bot_token")
 if not BOT_TOKEN:
     print("\n[ERROR] Telegram Bot Token is missing in telegram_config.json.")
     print("Please update telegram_config.json with your actual Bot Token from @BotFather.")
@@ -42,6 +45,8 @@ if not BOT_TOKEN:
 
 
 bot = telebot.TeleBot(BOT_TOKEN)
+order_store.init_db()
+ADMIN_CHAT_IDS = {int(x) for x in CONFIG.get("admin_chat_ids", []) if str(x).isdigit()}
 
 
 STATE_IDLE = 0
@@ -58,9 +63,23 @@ BUTTON_LOCATION = "Share Current Location"
 BUTTON_DRY_RUN = "Run Pipeline (Dry Run)"
 BUTTON_REAL_ORDER = "Run Pipeline (Real Order)"
 BUTTON_CANCEL = "Cancel"
+REAL_CONFIRM_TEXT = "CONFIRM ORDER"
 
 user_states = {}
 chat_accounts = {}
+
+
+def is_admin(chat_id):
+    return int(chat_id) in ADMIN_CHAT_IDS
+
+
+def remember_client(message):
+    user = message.from_user
+    return order_store.upsert_client(
+        message.chat.id,
+        username=getattr(user, "username", None),
+        first_name=getattr(user, "first_name", None),
+    )
 
 
 def reverse_geocode(lat, lon):
@@ -148,30 +167,57 @@ def selected_account(chat_id):
     return chat_accounts.get(chat_id) or os.environ.get("JIOMART_ACCOUNT") or "default"
 
 
+def latest_address_row(chat_id):
+    addresses = order_store.list_addresses(chat_id)
+    return addresses[0] if addresses else None
+
+
 def save_order(data):
     with open(ORDER_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
 def save_product_to_order(product_url, quantity):
-    data = load_existing_order()
-    data["products"] = [
+    return {
+        "dry_run": True,
+        "total_min_price": 0.0,
+        "total_max_price": 999999.0,
+        "products": [
+            {
+                "product_url": product_url,
+                "quantity": quantity,
+            }
+        ],
+    }
+
+
+def build_order_json(product_url, quantity, dry_run):
+    return {
+        "dry_run": dry_run,
+        "total_min_price": 0.0,
+        "total_max_price": 999999.0,
+        "products": [
         {
             "product_url": product_url,
             "quantity": quantity,
         }
-    ]
-    data.setdefault("dry_run", True)
-    data.setdefault("total_min_price", 0.0)
-    data.setdefault("total_max_price", 999999.0)
-    save_order(data)
-    return data
+        ],
+    }
 
 
 def set_dry_run(value):
     data = load_existing_order()
     data["dry_run"] = value
     save_order(data)
+
+
+def write_pipeline_files(chat_id, order_id, address_data, order_data):
+    run_dir = os.path.join(RUNTIME_DIR, str(chat_id), str(order_id))
+    address_path = os.path.join(run_dir, "address_input.json")
+    order_path = os.path.join(run_dir, "order_input.json")
+    order_store.write_json(address_path, address_data)
+    order_store.write_json(order_path, order_data)
+    return address_path, order_path
 
 
 def current_state(chat_id):
@@ -204,6 +250,7 @@ def build_address_from_session(chat_id, city, state):
         }
     )
     save_address(addr)
+    session["address_id"] = order_store.save_address(chat_id, addr)
     session["final_address"] = addr
     return addr
 
@@ -229,7 +276,7 @@ def ask_product_url(chat_id):
     set_state(chat_id, STATE_WAITING_PRODUCT_URL)
     bot.send_message(
         chat_id,
-        "Ab JioMart product ka URL bhejiye. Is product ko order_input.json me save karunga.",
+        "Ab JioMart product ka URL bhejiye.",
     )
 
 
@@ -316,6 +363,7 @@ def build_pipeline_message(process):
 
 @bot.message_handler(commands=["start", "location"])
 def handle_start(message):
+    remember_client(message)
     chat_id = message.chat.id
     user_states[chat_id] = {"state_val": STATE_WAITING_PIN}
     bot.reply_to(
@@ -327,7 +375,14 @@ def handle_start(message):
 
 @bot.message_handler(commands=["accounts"])
 def handle_accounts(message):
+    if not is_admin(message.chat.id):
+        bot.reply_to(message, "Ye admin command hai.")
+        return
+
     keys = load_cookie_account_keys()
+    if keys:
+        order_store.sync_accounts_from_keys(keys)
+    accounts = order_store.list_accounts()
     if not keys:
         bot.reply_to(
             message,
@@ -338,14 +393,38 @@ def handle_accounts(message):
     current = selected_account(message.chat.id)
     bot.reply_to(
         message,
-        "Saved accounts:\n"
-        + "\n".join(f"- {key}{' (selected)' if key == current else ''}" for key in keys)
-        + "\n\nUse: /use account_key",
+        "Account pool:\n"
+        + "\n".join(
+            f"- {acc['account_key']}: {acc['status']}, "
+            f"{acc['orders_today']}/{acc['max_orders_per_day']}"
+            f"{' (selected)' if acc['account_key'] == current else ''}"
+            for acc in accounts
+        )
+        + "\n\nUse: /use account_key for debug override.",
     )
+
+
+@bot.message_handler(commands=["sync_accounts"])
+def handle_sync_accounts(message):
+    if not is_admin(message.chat.id):
+        bot.reply_to(message, "Ye admin command hai.")
+        return
+
+    keys = load_cookie_account_keys()
+    if not keys:
+        bot.reply_to(message, "a.json me koi account key nahi mili.")
+        return
+
+    added = order_store.sync_accounts_from_keys(keys)
+    bot.reply_to(message, f"Synced {len(keys)} account(s). New added: {added}.")
 
 
 @bot.message_handler(commands=["use"])
 def handle_use_account(message):
+    if not is_admin(message.chat.id):
+        bot.reply_to(message, "Ye admin/debug command hai. Normal orders account pool se auto assign honge.")
+        return
+
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].strip():
         bot.reply_to(message, "Use format: /use account_key")
@@ -500,7 +579,7 @@ def handle_product_quantity(message):
     set_state(chat_id, STATE_CONFIRMATION, order=order)
     bot.reply_to(
         message,
-        f"Product saved in order_input.json:\n{product_url}\nQuantity: {quantity}",
+        f"Product saved:\n{product_url}\nQuantity: {quantity}",
     )
     ask_run_confirmation(chat_id)
 
@@ -508,6 +587,7 @@ def handle_product_quantity(message):
 @bot.message_handler(func=lambda msg: current_state(msg.chat.id) == STATE_CONFIRMATION)
 def handle_pipeline_trigger(message):
     chat_id = message.chat.id
+    remember_client(message)
     text = (message.text or "").strip()
 
     cancel_values = {BUTTON_CANCEL, "Cancel", "cancel"}
@@ -523,13 +603,76 @@ def handle_pipeline_trigger(message):
         )
         return
 
-    if text not in dry_values and text not in real_values:
+    session = user_states.get(chat_id, {})
+    if text in real_values:
+        order_data = session.get("order") or {}
+        products = order_data.get("products") or []
+        product = products[0] if products else {}
+        set_state(chat_id, STATE_CONFIRMATION, real_confirm_required=True)
+        bot.reply_to(
+            message,
+            "REAL ORDER confirm karne ke liye exactly ye type kijiye:\n"
+            f"{REAL_CONFIRM_TEXT}\n\n"
+            f"Product: {product.get('product_url', '?')}\n"
+            f"Quantity: {product.get('quantity', '?')}",
+            reply_markup=types.ReplyKeyboardRemove(),
+        )
+        return
+
+    if text == REAL_CONFIRM_TEXT and session.get("real_confirm_required"):
+        is_dry = False
+    elif text in dry_values:
+        is_dry = True
+    else:
         bot.reply_to(message, "Please button se Dry Run ya Real Order select kijiye.")
         return
 
-    is_dry = text in dry_values
-    set_dry_run(is_dry)
-    account_key = selected_account(chat_id)
+    order_data = session.get("order") or {}
+    products = order_data.get("products") or []
+    if not products:
+        bot.reply_to(message, "Product details missing hain. /start se fir se try kijiye.")
+        set_state(chat_id, STATE_IDLE)
+        return
+
+    address_row = latest_address_row(chat_id)
+    if not address_row:
+        bot.reply_to(message, "Address missing hai. /start se address setup kijiye.")
+        set_state(chat_id, STATE_IDLE)
+        return
+
+    if not order_store.list_accounts():
+        order_store.sync_accounts_from_keys(load_cookie_account_keys())
+
+    override_key = chat_accounts.get(chat_id)
+    account = order_store.get_account_by_key(override_key) if override_key else order_store.pick_account()
+    if not account:
+        bot.reply_to(
+            message,
+            "Abhi koi active JioMart account available nahi hai. Ya to cookies sync karo, ya daily limit complete ho gayi hai.",
+            reply_markup=types.ReplyKeyboardRemove(),
+        )
+        set_state(chat_id, STATE_IDLE)
+        return
+
+    account_key = account["account_key"]
+    product_url = products[0]["product_url"]
+    quantity = int(products[0]["quantity"])
+    pipeline_order = build_order_json(product_url, quantity, is_dry)
+    pipeline_address = order_store.address_to_pipeline_json(address_row)
+    db_order_id = order_store.create_order(
+        chat_id,
+        address_row["id"],
+        account["id"],
+        product_url,
+        quantity,
+        is_dry,
+    )
+    address_path, order_path = write_pipeline_files(
+        chat_id,
+        db_order_id,
+        pipeline_address,
+        pipeline_order,
+    )
 
     bot.send_message(
         chat_id,
@@ -542,14 +685,31 @@ def handle_pipeline_trigger(message):
 
     try:
         process = subprocess.run(
-            [sys.executable, os.path.join(DIR, "run_pipeline.py"), "--email", account_key],
+            [
+                sys.executable,
+                os.path.join(DIR, "run_pipeline.py"),
+                "--email",
+                account_key,
+                "--address-file",
+                address_path,
+                "--order-file",
+                order_path,
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="ignore",
         )
+        if process.returncode == 0:
+            order_store.finish_order(db_order_id, "dry_run_done" if is_dry else "placed")
+            order_store.mark_account_used(account["id"], increment_order_count=not is_dry)
+        else:
+            order_store.finish_order(db_order_id, "failed", error_message=(process.stderr or process.stdout or "")[:1000])
+            if "401" in (process.stderr or process.stdout or ""):
+                order_store.set_account_status(account_key, "expired")
         bot.send_message(chat_id, build_pipeline_message(process))
     except Exception as e:
+        order_store.finish_order(db_order_id, "failed", error_message=str(e))
         bot.send_message(chat_id, f"Pipeline running process crashed: {e}")
 
     set_state(chat_id, STATE_IDLE)
