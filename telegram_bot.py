@@ -214,23 +214,15 @@ def order_charge_per_account(chat_id):
 
 
 def main_menu_markup():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(BUTTON_NEW_ORDER))
-    markup.add(types.KeyboardButton(BUTTON_MY_ORDERS), types.KeyboardButton(BUTTON_MY_BALANCE))
-    markup.add(types.KeyboardButton(BUTTON_DEPOSIT), types.KeyboardButton(BUTTON_SETTINGS))
-    markup.add(types.KeyboardButton(BUTTON_HELP))
-    return markup
+    return types.ReplyKeyboardRemove()
 
 
 def configure_bot_menu():
-    commands = [types.BotCommand(command, description) for command, description in BOT_COMMANDS]
-    admin_commands = [
-        types.BotCommand(command, description)
-        for command, description in BOT_COMMANDS + ADMIN_COMMANDS
-    ]
     scopes = [
         types.BotCommandScopeDefault(),
         types.BotCommandScopeAllPrivateChats(),
+        types.BotCommandScopeAllGroupChats(),
+        types.BotCommandScopeAllChatAdministrators(),
     ]
 
     for scope in scopes:
@@ -239,21 +231,14 @@ def configure_bot_menu():
         except Exception as exc:
             print(f"Could not clear Telegram commands for {type(scope).__name__}: {exc}")
 
-    for scope in scopes:
-        try:
-            bot.set_my_commands(commands, scope=scope)
-        except Exception as exc:
-            print(f"Could not set Telegram commands for {type(scope).__name__}: {exc}")
-
     for admin_id in ADMIN_CHAT_IDS:
         try:
             bot.delete_my_commands(scope=types.BotCommandScopeChat(admin_id))
-            bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(admin_id))
         except Exception as exc:
-            print(f"Could not set admin Telegram commands for {admin_id}: {exc}")
+            print(f"Could not clear admin Telegram commands for {admin_id}: {exc}")
 
     try:
-        bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
+        bot.set_chat_menu_button(menu_button=types.MenuButtonDefault())
     except Exception as exc:
         print(f"Could not set Telegram menu button: {exc}")
 
