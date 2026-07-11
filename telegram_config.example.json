@@ -1,4 +1,20 @@
 {
   "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
-  "admin_chat_ids": []
+  "admin_chat_ids": [],
+  "order_charge_rupees": 5,
+  "upi_id": "your-upi-id@bank",
+  "upi_name": "JioMart Order Bot",
+  "phonepe": {
+    "enabled": false,
+    "environment": "sandbox",
+    "client_id": "PHONEPE_CLIENT_ID",
+    "client_secret": "PHONEPE_CLIENT_SECRET",
+    "client_version": "1",
+    "redirect_url": "https://your-domain.example/phonepe-return",
+    "expire_after_seconds": 900,
+    "timeout_seconds": 20
+  },
+  "require_user_approval": true,
+  "support_contact": "@your_support",
+  "bot_username": "YourJioMartBot"
 }

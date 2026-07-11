@@ -5,7 +5,10 @@
   "main": "get_cookies.js",
   "scripts": {
     "cookies": "node get_cookies.js",
-    "cookies:live-edge": "node get_cookies_live_edge.js"
+    "cookies:live-edge": "node get_cookies_live_edge.js",
+    "login:test": "node logintest.js",
+    "coupon:capture": "node coupon_capture.js",
+    "orders:otp": "node capture_orders_otp.js"
   },
   "dependencies": {
     "@gofynd/fp-signature": "^2.0.1",

@@ -120,17 +120,35 @@ def add_to_cart(product_uid, seller_id, size, quantity, email):
     """Tries multiple add-to-cart payloads. Returns new cart_id or None."""
     url = "https://www.jiomart.com/api/service/application/cart/v1.0/detail"
     attempts = []
+    cart_item_meta = {
+        "vertical_code": "GROCERIES",
+        "compute_delivery_fee": True,
+    }
     if product_uid and seller_id:
-        attempts.append({"item_id": int(product_uid), "quantity": quantity,
-                         "size": size, "seller_identifier": str(seller_id)})
+        attempts.append({
+            "item_id": int(product_uid),
+            "quantity": quantity,
+            "size": size,
+            "seller_identifier": str(seller_id),
+            "meta": cart_item_meta,
+        })
     if product_uid:
-        attempts.append({"item_id": int(product_uid), "quantity": quantity, "size": size})
+        attempts.append({
+            "item_id": int(product_uid),
+            "quantity": quantity,
+            "size": size,
+            "meta": cart_item_meta,
+        })
     if seller_id:
-        attempts.append({"seller_identifier": str(seller_id), "quantity": quantity})
+        attempts.append({
+            "seller_identifier": str(seller_id),
+            "quantity": quantity,
+            "meta": cart_item_meta,
+        })
 
     for item in attempts:
         res = request_helper.send_authorized_request("POST", url,
-                json_data={"items": [item]}, email=email)
+                json_data={"items": [item], "meta": cart_item_meta}, email=email)
         if res.status_code == 200:
             d    = res.json()
             if not d.get("success"):

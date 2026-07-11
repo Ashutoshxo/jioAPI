@@ -1,5 +1,6 @@
 {
   "dry_run": true,
+  "coupon_code": "",
   "total_min_price": 0.0,
   "total_max_price": 999999.0,
   "products": [

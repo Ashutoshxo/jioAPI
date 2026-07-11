@@ -6,6 +6,7 @@ import urllib.parse
 from datetime import datetime, timezone
 import json
 import os
+import subprocess
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 SECRET = "TpKw7wD9hH"
@@ -59,7 +60,45 @@ def generate_signature(method, path, headers, body="", secret=SECRET):
     sig = hmac_sha256_hex(secret, string_to_sign)
     return f"v1.1:{sig}"
 
+def refresh_cookies_via_logintest(email):
+    print(f"[Auto-Refresh] Trying Chromium browser refresh from a.json for {email}...")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(base_dir, "logintest.js")
+    if not os.path.exists(script_path):
+        print("[Auto-Refresh] logintest.js not found; skipping Chromium refresh.")
+        return False
+
+    try:
+        process = subprocess.run(
+            ["node", script_path, "--email", email, "--hold-ms", "0"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=90000,
+            cwd=base_dir,
+        )
+    except Exception as e:
+        print(f"[Auto-Refresh] Chromium refresh failed to run: {e}")
+        return False
+
+    output = ((process.stdout or "") + "\n" + (process.stderr or "")).strip()
+    if output:
+        print("\n".join(output.splitlines()[-18:]))
+
+    if process.returncode == 0:
+        print("[Auto-Refresh] Chromium confirmed session and saved refreshed state.")
+        return True
+    if process.returncode == 3 and "Saved refreshed browser state to a.json" in output:
+        print("[Auto-Refresh] Chromium could not confirm API, but refreshed browser state was saved. Retrying API once.")
+        return True
+
+    print(f"[Auto-Refresh] Chromium refresh did not produce a usable session. Exit code: {process.returncode}")
+    return False
+
 def refresh_cookies_via_playwright(email):
+    if refresh_cookies_via_logintest(email):
+        return True
     print(f"\n🔄 [Auto-Refresh] Cookies expired (401). Launching headless browser to refresh session for {email}...")
     try:
         from playwright.sync_api import sync_playwright
@@ -70,6 +109,7 @@ def refresh_cookies_via_playwright(email):
         with sync_playwright() as p:
             context = get_cookies.launch_context(p, user_data_dir, headless=True)
             get_cookies.apply_browser_patches(context)
+            cookies.apply_saved_storage_to_context(context, email)
             
             page = context.pages[0] if context.pages else context.new_page()
             
@@ -87,7 +127,9 @@ def refresh_cookies_via_playwright(email):
                 context.close()
                 return False
 
-            cookies.save_cookies(email, playwright_cookies)
+            storage_state = context.storage_state()
+            session_storage = get_cookies.get_context_session_storage(context)
+            cookies.save_browser_storage(email, storage_state, session_storage)
             print(f"✅ [Auto-Refresh] Successfully refreshed and saved {len(playwright_cookies)} cookies.")
             context.close()
             return True

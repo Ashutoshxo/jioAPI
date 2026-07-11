@@ -70,11 +70,43 @@ def apply_browser_patches(context):
     )
 
 
+def get_context_session_storage(context):
+    session_storage = {}
+    for page in context.pages:
+        try:
+            origin = page.evaluate("window.location.origin")
+            if not origin or origin == "null":
+                continue
+            items = page.evaluate(
+                """
+                () => {
+                  const entries = [];
+                  for (let i = 0; i < window.sessionStorage.length; i += 1) {
+                    const name = window.sessionStorage.key(i);
+                    entries.push({ name, value: window.sessionStorage.getItem(name) || '' });
+                  }
+                  return entries;
+                }
+                """
+            )
+            session_storage[origin] = items
+        except Exception:
+            continue
+    return session_storage
+
+
 def save_context_cookies(context, email):
-    playwright_cookies = context.cookies()
-    cookies.save_cookies(email, playwright_cookies)
+    storage_state = context.storage_state()
+    session_storage = get_context_session_storage(context)
+    playwright_cookies = storage_state.get("cookies", context.cookies())
+    cookies.save_browser_storage(email, storage_state, session_storage)
     has_session = any(c.get("name") == "R.session" for c in playwright_cookies)
+    local_storage_count = sum(
+        len(origin.get("localStorage", [])) for origin in storage_state.get("origins", [])
+    )
+    session_storage_count = sum(len(items) for items in session_storage.values())
     print(f"\nSaved {len(playwright_cookies)} cookies to a.json for {email}.")
+    print(f"Saved {local_storage_count} localStorage items and {session_storage_count} sessionStorage items.")
     print(f"R.session present: {'yes' if has_session else 'no'}")
     return playwright_cookies
 

@@ -344,18 +344,41 @@ def add_item_to_cart(product_uid, seller_id, size, quantity, email):
     """Add item to cart. Returns (cart_id, product_name, price)."""
     url   = "https://www.jiomart.com/api/service/application/cart/v1.0/detail"
     tries = []
+    cart_item_meta = {
+        "vertical_code": "GROCERIES",
+        "compute_delivery_fee": True,
+    }
     if product_uid and seller_id:
-        tries.append({"item_id": int(product_uid), "quantity": quantity, "size": size, "seller_identifier": str(seller_id)})
+        tries.append({
+            "item_id": int(product_uid),
+            "quantity": quantity,
+            "size": size,
+            "seller_identifier": str(seller_id),
+            "meta": cart_item_meta,
+        })
     if product_uid:
-        tries.append({"item_id": int(product_uid), "quantity": quantity, "size": size})
+        tries.append({
+            "item_id": int(product_uid),
+            "quantity": quantity,
+            "size": size,
+            "meta": cart_item_meta,
+        })
     if seller_id:
-        tries.append({"seller_identifier": str(seller_id), "quantity": quantity})
+        tries.append({
+            "seller_identifier": str(seller_id),
+            "quantity": quantity,
+            "meta": cart_item_meta,
+        })
 
     for attempt_idx, item in enumerate(tries, 1):
-        res = request_helper.send_authorized_request("POST", url, json_data={"items": [item]}, email=email)
+        payload = {
+            "items": [item],
+            "meta": cart_item_meta,
+        }
+        res = request_helper.send_authorized_request("POST", url, json_data=payload, email=email)
         debug_payload = {
             "attempt": attempt_idx,
-            "request_item": item,
+            "request_payload": payload,
             "status_code": res.status_code,
             "response_text": res.text[:4000],
         }
@@ -401,6 +424,71 @@ def get_cart(email):
     d = res.json()
     save_debug_json("cart_after_add.json", d)
     return d.get("cart_id") or d.get("id"), d.get("items", []), d
+
+
+def list_coupons(email):
+    res = request_helper.send_authorized_request(
+        "GET",
+        "https://www.jiomart.com/api/service/application/cart/v1.0/coupon",
+        email=email,
+    )
+    save_debug_json("coupon_list.json", {
+        "status_code": res.status_code,
+        "response_text": res.text[:8000],
+    })
+    if res.status_code != 200:
+        return []
+    data = res.json()
+    return data.get("available_coupon_list") or data.get("coupon_list") or []
+
+
+def apply_coupon(coupon_code, email):
+    coupon_code = (coupon_code or "").strip()
+    if not coupon_code:
+        return False, "No coupon code provided"
+
+    coupons = list_coupons(email)
+    match = next(
+        (
+            coupon for coupon in coupons
+            if str(coupon.get("coupon_code") or coupon.get("title") or "").upper() == coupon_code.upper()
+        ),
+        None,
+    )
+    if match and match.get("is_applicable") is False:
+        return False, match.get("coupon_applicable_message") or f"Coupon {coupon_code} is not applicable"
+
+    payloads = [
+        {"coupon_code": coupon_code},
+        {"coupon": coupon_code},
+        {"code": coupon_code},
+    ]
+    methods = ["POST", "PUT", "PATCH"]
+    last_message = ""
+    for method in methods:
+        for payload in payloads:
+            res = request_helper.send_authorized_request(
+                method,
+                "https://www.jiomart.com/api/service/application/cart/v1.0/coupon",
+                json_data=payload,
+                email=email,
+            )
+            save_debug_json(f"coupon_apply_{method.lower()}_{list(payload.keys())[0]}.json", {
+                "status_code": res.status_code,
+                "payload": payload,
+                "response_text": res.text[:8000],
+            })
+            last_message = res.text[:500]
+            if res.status_code in (200, 201):
+                try:
+                    data = res.json()
+                except Exception:
+                    data = {}
+                if data.get("success") is False:
+                    last_message = data.get("message") or last_message
+                    continue
+                return True, data.get("message") or f"Coupon {coupon_code} applied"
+    return False, last_message or f"Coupon {coupon_code} apply failed"
 
 # ─────────────────────────────────────────────
 # PHASE 3 — Place Order
@@ -572,6 +660,26 @@ def main():
     # ══════════════════════════════════════════
     # PHASE 3 — Fetch and Confirm Delivery Address
     # ══════════════════════════════════════════
+    coupon_code = (order_input.get("coupon_code") or "").strip()
+    if coupon_code:
+        print(f"\n[2f] Applying coupon: {coupon_code}")
+        coupon_ok, coupon_message = apply_coupon(coupon_code, email)
+        if not coupon_ok:
+            err(f"Coupon {coupon_code} apply failed: {coupon_message}")
+        ok(coupon_message)
+        refreshed_cart_id, _, refreshed_cart = get_cart(email)
+        if refreshed_cart_id:
+            global_cart_id = refreshed_cart_id
+        coupon = refreshed_cart.get("coupon") or {}
+        raw = (refreshed_cart.get("breakup_values") or {}).get("raw") or {}
+        if coupon.get("is_applied"):
+            ok(
+                f"Coupon applied: {coupon.get('coupon_code') or coupon_code} | "
+                f"Discount: Rs.{coupon.get('discount') or abs(float(raw.get('coupon') or 0))}"
+            )
+        else:
+            err(f"Coupon {coupon_code} did not show as applied in cart.")
+
     sep("PHASE 3 — Address Verification")
     
     addrs  = request_helper.send_authorized_request(

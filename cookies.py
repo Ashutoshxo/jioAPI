@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "a.json")
 JIOMART_SESSION_COOKIE_NAMES = {"R.session"}
@@ -46,6 +47,38 @@ def normalize_cookies(cookie_list):
         for variant in _normalized_cookie_variants(cookie):
             cookie_map[_cookie_key(variant)] = variant
     return list(cookie_map.values())
+
+def _empty_profile():
+    return {
+        "cookies": [],
+        "origins": [],
+        "sessionStorage": {},
+    }
+
+def _profile_from_value(value):
+    if isinstance(value, list):
+        profile = _empty_profile()
+        profile["cookies"] = value
+        return profile
+
+    if isinstance(value, dict):
+        profile = _empty_profile()
+        profile["cookies"] = value.get("cookies", [])
+        profile["origins"] = value.get("origins", [])
+        session_storage = value.get("sessionStorage", {})
+        profile["sessionStorage"] = session_storage if isinstance(session_storage, dict) else {}
+        return profile
+
+    return _empty_profile()
+
+def _site_from_origin(origin):
+    try:
+        parsed = urlparse(origin)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return origin
 
 def get_active_email(override_email=None):
     if override_email:
@@ -98,18 +131,100 @@ def read_cookies(email=None):
     if not email:
         email = get_active_email()
     all_cookies = load_all_cookies()
-    return all_cookies.get(email, [])
+    return _profile_from_value(all_cookies.get(email, [])).get("cookies", [])
+
+def read_storage_state(email=None):
+    if not email:
+        email = get_active_email()
+    all_cookies = load_all_cookies()
+    profile = _profile_from_value(all_cookies.get(email, []))
+    return {
+        "cookies": normalize_cookies(profile.get("cookies", [])),
+        "origins": profile.get("origins", []),
+    }
+
+def read_session_storage(email=None):
+    if not email:
+        email = get_active_email()
+    all_cookies = load_all_cookies()
+    return _profile_from_value(all_cookies.get(email, [])).get("sessionStorage", {})
 
 def save_cookies(email, cookies):
     if not email:
         email = get_active_email()
     all_cookies = load_all_cookies()
-    all_cookies[email] = normalize_cookies(cookies)
+    profile = _profile_from_value(all_cookies.get(email, []))
+    profile["cookies"] = normalize_cookies(cookies)
+    all_cookies[email] = profile
     try:
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             json.dump(all_cookies, f, indent=2)
     except Exception as e:
         print(f"Error saving cookies to file: {e}", file=sys.stderr)
+
+def save_browser_storage(email, storage_state, session_storage=None):
+    if not email:
+        email = get_active_email()
+    all_cookies = load_all_cookies()
+    profile = _profile_from_value(all_cookies.get(email, []))
+    if isinstance(storage_state, dict):
+        profile["cookies"] = normalize_cookies(storage_state.get("cookies", profile["cookies"]))
+        profile["origins"] = storage_state.get("origins", profile["origins"])
+    if isinstance(session_storage, dict):
+        profile["sessionStorage"] = session_storage
+    all_cookies[email] = profile
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_cookies, f, indent=2)
+    except Exception as e:
+        print(f"Error saving browser storage to file: {e}", file=sys.stderr)
+
+def apply_saved_storage_to_context(context, email=None):
+    if not email:
+        email = get_active_email()
+
+    storage_state = read_storage_state(email)
+    session_storage = read_session_storage(email)
+    origin_payload = {}
+
+    for origin_entry in storage_state.get("origins", []):
+        origin = origin_entry.get("origin")
+        if not origin:
+            continue
+        origin_payload.setdefault(_site_from_origin(origin), {"localStorage": [], "sessionStorage": []})
+        origin_payload[_site_from_origin(origin)]["localStorage"] = origin_entry.get("localStorage", [])
+
+    for origin, items in session_storage.items():
+        if isinstance(items, list):
+            origin_payload.setdefault(_site_from_origin(origin), {"localStorage": [], "sessionStorage": []})
+            origin_payload[_site_from_origin(origin)]["sessionStorage"] = items
+
+    if not origin_payload:
+        return
+
+    script = """
+        (() => {
+          const payload = __PAYLOAD__;
+          const currentOrigin = window.location.origin;
+          const state = payload[currentOrigin];
+          if (!state) return;
+
+          for (const item of state.localStorage || []) {
+            if (item && typeof item.name === 'string') {
+              window.localStorage.setItem(item.name, item.value || '');
+            }
+          }
+
+          for (const item of state.sessionStorage || []) {
+            if (item && typeof item.name === 'string') {
+              window.sessionStorage.setItem(item.name, item.value || '');
+            }
+          }
+        })();
+        """.replace("__PAYLOAD__", json.dumps(origin_payload))
+    context.add_init_script(
+        script,
+    )
 
 def get_cookie_string(email=None):
     if not email:
